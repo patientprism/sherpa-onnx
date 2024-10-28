@@ -119,12 +119,13 @@ class OfflineSpeakerDiarizationPyannoteImpl
 
     segmentations.clear();
 
-    if (labels.size() == 1 && !config_.extract_speaker_embeddings) {
+    if (labels.size() == 1) {
       if (callback) {
         callback(1, 1, callback_arg);
       }
 
-      return HandleOneChunkSpecialCase(labels[0], n, speaker_embeddings_map);
+      return HandleOneChunkSpecialCase(labels[0], audio, n,
+                                       speaker_embeddings_map);
     }
 
     // labels[i] is a 0-1 matrix of shape (num_frames, num_speakers)
@@ -169,14 +170,6 @@ class OfflineSpeakerDiarizationPyannoteImpl
     if (config_.extract_speaker_embeddings) {
       speaker_embeddings_map =
           ExtractSpeakerEmbeddings(cluster_labels, embeddings);
-
-      if (labels.size() == 1) {
-        if (callback) {
-          callback(1, 1, callback_arg);
-        }
-
-        return HandleOneChunkSpecialCase(labels[0], n, speaker_embeddings_map);
-      }
     }
 
     int32_t max_cluster_index =
@@ -743,9 +736,29 @@ class OfflineSpeakerDiarizationPyannoteImpl
   }
 
   OfflineSpeakerDiarizationResult HandleOneChunkSpecialCase(
-      const Matrix2DInt32 &final_labels, int32_t num_samples,
-      const std::unordered_map<int32_t, std::vector<float>>
-          &speaker_embeddings_map) const {
+      const Matrix2DInt32 &final_labels, const float *audio,
+      int32_t num_samples,
+      std::unordered_map<int32_t, std::vector<float>> &speaker_embeddings_map)
+      const {
+    if (config_.extract_speaker_embeddings) {
+      // Compute embedding for the whole audio
+      int32_t sample_rate = segmentation_model_.GetModelMetaData().sample_rate;
+
+      auto stream = embedding_extractor_.CreateStream();
+      stream->AcceptWaveform(sample_rate, audio, num_samples);
+      stream->InputFinished();
+
+      if (embedding_extractor_.IsReady(stream.get())) {
+        std::vector<float> embedding =
+            embedding_extractor_.Compute(stream.get());
+
+        speaker_embeddings_map[1] = std::move(embedding);
+      } else {
+        SHERPA_ONNX_LOGE(
+            "Failed to extract speaker embedding for single chunk.");
+      }
+    }
+
     const auto &meta_data = segmentation_model_.GetModelMetaData();
     int32_t window_size = meta_data.window_size;
     int32_t window_shift = meta_data.window_shift;
