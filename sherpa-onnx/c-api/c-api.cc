@@ -1784,6 +1784,8 @@ void SherpaOnnxOfflineSpeakerDiarizationResultGetSpeakerEmbeddings(
   try {
     embeddings_vector = r->impl.GetSpeakerEmbeddings(speaker_label);
   } catch (const std::out_of_range &e) {
+    *num_embeddings = 0;
+    *embeddings = nullptr;
     return;
   }
 
