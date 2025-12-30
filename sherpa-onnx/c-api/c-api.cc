@@ -1776,27 +1776,25 @@ int32_t SherpaOnnxOfflineSpeakerDiarizationResultGetNumSegments(
   return r->impl.NumSegments();
 }
 
-void SherpaOnnxOfflineSpeakerDiarizationResultGetSpeakerEmbeddings(
+void SherpaOnnxOfflineSpeakerDiarizationResultGetSpeakerEmbedding(
     const SherpaOnnxOfflineSpeakerDiarizationResult *r,
-    const int32_t speaker_label, float **embeddings, int32_t *num_embeddings) {
-  std::vector<float> embeddings_vector;
-
-  try {
-    embeddings_vector = r->impl.GetSpeakerEmbeddings(speaker_label);
-  } catch (const std::out_of_range &e) {
-    *num_embeddings = 0;
-    *embeddings = nullptr;
+    int32_t speaker_label, float **embedding, int32_t *embedding_dim) {
+  std::vector<float> embedding_vector = r->impl.GetSpeakerEmbedding(speaker_label);
+  
+  if (embedding_vector.empty()) {
+    *embedding_dim = 0;
+    *embedding = nullptr;
     return;
   }
 
-  *num_embeddings = embeddings_vector.size();
-  *embeddings = new float[*num_embeddings];
-  std::copy(embeddings_vector.begin(), embeddings_vector.end(), *embeddings);
+  *embedding_dim = static_cast<int32_t>(embedding_vector.size());
+  *embedding = new float[*embedding_dim];
+  std::copy(embedding_vector.begin(), embedding_vector.end(), *embedding);
 }
 
-void SherpaOnnxOfflineSpeakerDiarizationResultFreeSpeakerEmbeddings(
-    float *embeddings) {
-  delete[] embeddings;
+void SherpaOnnxOfflineSpeakerDiarizationResultFreeSpeakerEmbedding(
+    float *embedding) {
+  delete[] embedding;
 }
 
 const SherpaOnnxOfflineSpeakerDiarizationSegment *

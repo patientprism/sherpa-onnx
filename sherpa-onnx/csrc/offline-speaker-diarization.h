@@ -25,7 +25,6 @@ struct OfflineSpeakerDiarizationConfig {
   OfflineSpeakerSegmentationModelConfig segmentation;
   SpeakerEmbeddingExtractorConfig embedding;
   FastClusteringConfig clustering;
-  bool extract_speaker_embeddings = false;
 
   // if a segment is less than this value, then it is discarded
   float min_duration_on = 0.3;  // in seconds
@@ -35,13 +34,18 @@ struct OfflineSpeakerDiarizationConfig {
   // We do this recursively.
   float min_duration_off = 0.5;  // in seconds
 
+  // If true, the result will include speaker embeddings.
+  // Each speaker will have a single centroid embedding computed by averaging
+  // all embeddings belonging to that speaker after clustering.
+  bool extract_speaker_embeddings = false;
+
   OfflineSpeakerDiarizationConfig() = default;
 
   OfflineSpeakerDiarizationConfig(
       const OfflineSpeakerSegmentationModelConfig &segmentation,
       const SpeakerEmbeddingExtractorConfig &embedding,
       const FastClusteringConfig &clustering, float min_duration_on,
-      float min_duration_off)
+      float min_duration_off, bool extract_speaker_embeddings = false)
       : segmentation(segmentation),
         embedding(embedding),
         clustering(clustering),

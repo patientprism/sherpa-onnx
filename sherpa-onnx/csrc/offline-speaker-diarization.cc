@@ -30,9 +30,10 @@ void OfflineSpeakerDiarizationConfig::Register(ParseOptions *po) {
                "than this value, then these two segments are merged into a "
                "single segment. We do it recursively.");
 
-  po->Register("extract-speaker-embeddings", &extract_speaker_embeddings,
-               "Whether to store speaker embeddings during diarization so they "
-               "can be extracted later on.");
+  po->Register("return-speaker-embeddings", &extract_speaker_embeddings,
+               "if true, the result will include speaker embeddings. "
+               "Each speaker will have a centroid embedding computed by "
+               "averaging all embeddings belonging to that speaker.");
 }
 
 bool OfflineSpeakerDiarizationConfig::Validate() const {
@@ -69,8 +70,9 @@ std::string OfflineSpeakerDiarizationConfig::ToString() const {
   os << "embedding=" << embedding.ToString() << ", ";
   os << "clustering=" << clustering.ToString() << ", ";
   os << "min_duration_on=" << min_duration_on << ", ";
-  os << "min_duration_off=" << min_duration_off << ")";
-  os << "extract_speaker_embeddings=" << extract_speaker_embeddings << ")";
+  os << "min_duration_off=" << min_duration_off << ", ";
+  os << "extract_speaker_embeddings="
+     << (extract_speaker_embeddings ? "true" : "false") << ")";
 
   return os.str();
 }

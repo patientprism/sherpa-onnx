@@ -101,8 +101,6 @@ class OfflineSpeakerDiarizationPyannoteImpl
       const float *audio, int32_t n,
       OfflineSpeakerDiarizationProgressCallback callback = nullptr,
       void *callback_arg = nullptr) const override {
-    std::unordered_map<int32_t, std::vector<float>> speaker_embeddings_map;
-
     std::vector<Matrix2D> segmentations = RunSpeakerSegmentationModel(audio, n);
     // segmentations[i] is for chunk_i
     // Each matrix is of shape (num_frames, num_powerset_classes)
@@ -124,8 +122,7 @@ class OfflineSpeakerDiarizationPyannoteImpl
         callback(1, 1, callback_arg);
       }
 
-      return HandleOneChunkSpecialCase(labels[0], audio, n,
-                                       speaker_embeddings_map);
+      return HandleOneChunkSpecialCase(labels[0], n, audio);
     }
 
     // labels[i] is a 0-1 matrix of shape (num_frames, num_speakers)
@@ -153,6 +150,7 @@ class OfflineSpeakerDiarizationPyannoteImpl
     if (valid_indexes.size() != chunk_speaker_samples_list_pair.second.size()) {
       std::vector<Int32Pair> chunk_speaker_pair;
       std::vector<std::vector<Int32Pair>> sample_indexes;
+
       chunk_speaker_pair.reserve(valid_indexes.size());
       sample_indexes.reserve(valid_indexes.size());
       for (auto i : valid_indexes) {
@@ -160,17 +158,13 @@ class OfflineSpeakerDiarizationPyannoteImpl
         sample_indexes.push_back(
             std::move(chunk_speaker_samples_list_pair.second[i]));
       }
+
       chunk_speaker_samples_list_pair.first = std::move(chunk_speaker_pair);
       chunk_speaker_samples_list_pair.second = std::move(sample_indexes);
     }
 
     std::vector<int32_t> cluster_labels = clustering_->Cluster(
         &embeddings(0, 0), embeddings.rows(), embeddings.cols());
-
-    if (config_.extract_speaker_embeddings) {
-      speaker_embeddings_map =
-          ExtractSpeakerEmbeddings(cluster_labels, embeddings);
-    }
 
     int32_t max_cluster_index =
         *std::max_element(cluster_labels.begin(), cluster_labels.end());
@@ -186,7 +180,13 @@ class OfflineSpeakerDiarizationPyannoteImpl
     Matrix2DInt32 final_labels =
         FinalizeLabels(speaker_count, speakers_per_frame);
 
-    auto result = ComputeResult(final_labels, speaker_embeddings_map);
+    auto result = ComputeResult(final_labels);
+
+    // Compute and attach speaker embeddings if requested
+    if (config_.extract_speaker_embeddings) {
+      ComputeSpeakerEmbeddings(embeddings, cluster_labels, max_cluster_index,
+                               &result);
+    }
 
     return result;
   }
@@ -515,41 +515,6 @@ class OfflineSpeakerDiarizationPyannoteImpl
     return ans;
   }
 
-  /**
-   * @param cluster_labels: cluster labels for each (chunk, speaker) pair
-   * @param embeddings: embeddings for each (chunk, speaker) pair
-   *
-   * @return Average embeddings for each cluster label
-   */
-  std::unordered_map<int32_t, std::vector<float>> ExtractSpeakerEmbeddings(
-      std::vector<int32_t> &cluster_labels, Matrix2D &embeddings) const {
-    std::unordered_map<int32_t, std::vector<float>> speaker_embeddings_map;
-    std::unordered_map<int32_t, std::vector<int32_t>>
-        cluster_to_embedding_indices;
-
-    for (int32_t i = 0; i < cluster_labels.size(); ++i) {
-      int32_t cluster_label = cluster_labels[i];
-      cluster_to_embedding_indices[cluster_label].push_back(i);
-    }
-
-    for (const auto &kv : cluster_to_embedding_indices) {
-      int32_t cluster_label = kv.first;
-      const std::vector<int32_t> &indices = kv.second;
-      Eigen::VectorXf mean_embedding = Eigen::VectorXf::Zero(embeddings.cols());
-
-      for (int32_t idx : indices) {
-        mean_embedding += embeddings.row(idx);
-      }
-      mean_embedding /= indices.size();
-
-      // Store the mean embedding
-      speaker_embeddings_map[cluster_label] = std::vector<float>(
-          mean_embedding.data(), mean_embedding.data() + mean_embedding.size());
-    }
-
-    return speaker_embeddings_map;
-  }
-
   std::unordered_map<Int32Pair, int32_t, PairHash> ConvertChunkSpeakerToCluster(
       const std::vector<Int32Pair> &chunk_speaker_pair,
       const std::vector<int32_t> &cluster_labels) const {
@@ -662,9 +627,7 @@ class OfflineSpeakerDiarizationPyannoteImpl
   }
 
   OfflineSpeakerDiarizationResult ComputeResult(
-      const Matrix2DInt32 &final_labels,
-      const std::unordered_map<int32_t, std::vector<float>>
-          &speaker_embeddings_map) const {
+      const Matrix2DInt32 &final_labels) const {
     Matrix2DInt32 final_labels_t = final_labels.transpose();
     int32_t num_speakers = final_labels_t.rows();
     int32_t num_frames = final_labels_t.cols();
@@ -718,13 +681,6 @@ class OfflineSpeakerDiarizationPyannoteImpl
       // merge segments if the gap between them is less than min_duration_off
       MergeSegments(&this_speaker);
 
-      if (config_.extract_speaker_embeddings) {
-        auto it = speaker_embeddings_map.find(speaker_index);
-        if (it != speaker_embeddings_map.end()) {
-          ans.AddSpeakerEmbeddings(speaker_index, it->second);
-        }
-      }
-
       for (const auto &seg : this_speaker) {
         if (seg.Duration() > config_.min_duration_on) {
           ans.Add(seg);
@@ -735,48 +691,183 @@ class OfflineSpeakerDiarizationPyannoteImpl
     return ans;
   }
 
-  OfflineSpeakerDiarizationResult HandleOneChunkSpecialCase(
-      const Matrix2DInt32 &final_labels, const float *audio,
-      int32_t num_samples,
-      std::unordered_map<int32_t, std::vector<float>> &speaker_embeddings_map)
-      const {
-    if (config_.extract_speaker_embeddings) {
-      // Compute embedding for the whole audio
-      int32_t sample_rate = segmentation_model_.GetModelMetaData().sample_rate;
+  /**
+   * Compute per-speaker embeddings by averaging all embeddings belonging
+   * to each speaker (cluster).
+   *
+   * @param embeddings Matrix of shape (num_embeddings, embedding_dim)
+   *                   containing all chunk-speaker pair embeddings
+   * @param cluster_labels Vector of cluster assignments for each embedding
+   * @param max_cluster_index Maximum cluster index (num_speakers - 1)
+   * @param result Pointer to result object to store speaker embeddings
+   */
+  void ComputeSpeakerEmbeddings(
+      const Matrix2D &embeddings, const std::vector<int32_t> &cluster_labels,
+      int32_t max_cluster_index,
+      OfflineSpeakerDiarizationResult *result) const {
+    int32_t embedding_dim = embeddings.cols();
+    int32_t num_speakers = max_cluster_index + 1;
 
-      auto stream = embedding_extractor_.CreateStream();
-      stream->AcceptWaveform(sample_rate, audio, num_samples);
-      stream->InputFinished();
+    // Accumulate embeddings and counts per speaker
+    std::vector<std::vector<float>> speaker_embedding_sums(
+        num_speakers, std::vector<float>(embedding_dim, 0.0f));
+    std::vector<int32_t> speaker_counts(num_speakers, 0);
 
-      if (embedding_extractor_.IsReady(stream.get())) {
-        std::vector<float> embedding =
-            embedding_extractor_.Compute(stream.get());
+    for (size_t i = 0; i < cluster_labels.size(); ++i) {
+      int32_t speaker_id = cluster_labels[i];
+      speaker_counts[speaker_id] += 1;
 
-        speaker_embeddings_map[1] = std::move(embedding);
-      } else {
-        SHERPA_ONNX_LOGE(
-            "Failed to extract speaker embedding for single chunk.");
+      for (int32_t d = 0; d < embedding_dim; ++d) {
+        speaker_embedding_sums[speaker_id][d] += embeddings(i, d);
       }
     }
 
+    // Compute average (centroid) for each speaker and normalize
+    for (int32_t speaker_id = 0; speaker_id < num_speakers; ++speaker_id) {
+      if (speaker_counts[speaker_id] == 0) {
+        continue;
+      }
+
+      std::vector<float> centroid(embedding_dim);
+      float count = static_cast<float>(speaker_counts[speaker_id]);
+
+      // Compute mean
+      for (int32_t d = 0; d < embedding_dim; ++d) {
+        centroid[d] = speaker_embedding_sums[speaker_id][d] / count;
+      }
+
+      // L2 normalize the centroid embedding
+      float norm = 0.0f;
+      for (int32_t d = 0; d < embedding_dim; ++d) {
+        norm += centroid[d] * centroid[d];
+      }
+      norm = std::sqrt(norm);
+
+      if (norm > 1e-12f) {
+        for (int32_t d = 0; d < embedding_dim; ++d) {
+          centroid[d] /= norm;
+        }
+      }
+
+      result->SetSpeakerEmbedding(speaker_id, centroid);
+    }
+  }
+
+  OfflineSpeakerDiarizationResult HandleOneChunkSpecialCase(
+      const Matrix2DInt32 &final_labels, int32_t num_samples,
+      const float *audio = nullptr) const {
     const auto &meta_data = segmentation_model_.GetModelMetaData();
     int32_t window_size = meta_data.window_size;
     int32_t window_shift = meta_data.window_shift;
     int32_t receptive_field_shift = meta_data.receptive_field_shift;
 
     bool has_last_chunk = (num_samples - window_size) % window_shift > 0;
+
+    OfflineSpeakerDiarizationResult result;
+
     if (!has_last_chunk) {
-      return ComputeResult(final_labels, speaker_embeddings_map);
+      result = ComputeResult(final_labels);
+    } else {
+      int32_t num_frames = final_labels.rows();
+      int32_t new_num_frames = num_samples / receptive_field_shift;
+      num_frames = (new_num_frames <= num_frames) ? new_num_frames : num_frames;
+      result =
+          ComputeResult(final_labels(Eigen::seq(0, num_frames), Eigen::all));
     }
 
-    int32_t num_frames = final_labels.rows();
+    // For single chunk, compute speaker embeddings if requested
+    if (config_.extract_speaker_embeddings && audio != nullptr) {
+      ComputeSingleChunkSpeakerEmbeddings(final_labels, num_samples, audio,
+                                          &result);
+    }
 
-    int32_t new_num_frames = num_samples / receptive_field_shift;
+    return result;
+  }
 
-    num_frames = (new_num_frames <= num_frames) ? new_num_frames : num_frames;
+  /**
+   * Compute speaker embeddings for the single-chunk special case.
+   * In this case, there's no clustering - each local speaker gets their own
+   * embedding.
+   */
+  void ComputeSingleChunkSpeakerEmbeddings(
+      const Matrix2DInt32 &labels, int32_t num_samples, const float *audio,
+      OfflineSpeakerDiarizationResult *result) const {
+    const auto &meta_data = segmentation_model_.GetModelMetaData();
+    int32_t sample_rate = meta_data.sample_rate;
+    int32_t window_size = meta_data.window_size;
+    int32_t num_speakers = labels.cols();
+    int32_t num_frames = labels.rows();
 
-    return ComputeResult(final_labels(Eigen::seq(0, num_frames), Eigen::all),
-                         speaker_embeddings_map);
+    auto IsNaNWrapper = [](float f) -> bool { return std::isnan(f); };
+
+    for (int32_t speaker_id = 0; speaker_id < num_speakers; ++speaker_id) {
+      // Find active frames for this speaker
+      std::vector<Int32Pair> sample_ranges;
+      bool is_active = false;
+      int32_t start_frame = 0;
+
+      for (int32_t frame = 0; frame < num_frames; ++frame) {
+        if (labels(frame, speaker_id) == 1) {
+          if (!is_active) {
+            is_active = true;
+            start_frame = frame;
+          }
+        } else if (is_active) {
+          is_active = false;
+          int32_t start_sample =
+              static_cast<float>(start_frame) / num_frames * window_size;
+          int32_t end_sample =
+              static_cast<float>(frame) / num_frames * window_size;
+          if (end_sample > num_samples) end_sample = num_samples;
+          sample_ranges.emplace_back(start_sample, end_sample);
+        }
+      }
+
+      if (is_active) {
+        int32_t start_sample =
+            static_cast<float>(start_frame) / num_frames * window_size;
+        int32_t end_sample = num_samples;
+        sample_ranges.emplace_back(start_sample, end_sample);
+      }
+
+      // Skip if no active frames
+      if (sample_ranges.empty()) {
+        continue;
+      }
+
+      // Compute embedding from all active segments
+      auto stream = embedding_extractor_.CreateStream();
+      for (const auto &range : sample_ranges) {
+        int32_t n = range.second - range.first;
+        if (n > 0) {
+          stream->AcceptWaveform(sample_rate, audio + range.first, n);
+        }
+      }
+
+      stream->InputFinished();
+      if (!embedding_extractor_.IsReady(stream.get())) {
+        continue;  // Skip if segment too short
+      }
+
+      std::vector<float> embedding = embedding_extractor_.Compute(stream.get());
+
+      if (std::none_of(embedding.begin(), embedding.end(), IsNaNWrapper)) {
+        // L2 normalize
+        float norm = 0.0f;
+        for (float v : embedding) {
+          norm += v * v;
+        }
+        norm = std::sqrt(norm);
+
+        if (norm > 1e-12f) {
+          for (float &v : embedding) {
+            v /= norm;
+          }
+        }
+
+        result->SetSpeakerEmbedding(speaker_id, embedding);
+      }
+    }
   }
 
   void MergeSegments(

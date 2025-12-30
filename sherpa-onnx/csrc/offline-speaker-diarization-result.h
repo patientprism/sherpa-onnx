@@ -46,13 +46,6 @@ class OfflineSpeakerDiarizationResult {
   // Add a new segment
   void Add(const OfflineSpeakerDiarizationSegment &segment);
 
-  // Add a speaker's extracted embeddings
-  void AddSpeakerEmbeddings(const int32_t speaker_label,
-                            const std::vector<float> &embeddings);
-
-  // Return the embeddings of the speaker with the given label
-  std::vector<float> GetSpeakerEmbeddings(const int32_t speaker_label) const;
-
   // Number of distinct speakers contained in this object at this point
   int32_t NumSpeakers() const;
 
@@ -66,9 +59,33 @@ class OfflineSpeakerDiarizationResult {
   std::vector<std::vector<OfflineSpeakerDiarizationSegment>> SortBySpeaker()
       const;
 
+  // Set the embedding for a specific speaker
+  // @param speaker_id The speaker ID (0-indexed)
+  // @param embedding The embedding vector for this speaker
+  void SetSpeakerEmbedding(int32_t speaker_id,
+                           const std::vector<float> &embedding);
+
+  // Get the embedding for a specific speaker
+  // @param speaker_id The speaker ID (0-indexed)
+  // @return The embedding vector, or an empty vector if not found
+  std::vector<float> GetSpeakerEmbedding(int32_t speaker_id) const;
+
+  // Get all speaker embeddings
+  // @return A map from speaker_id to embedding vector
+  const std::unordered_map<int32_t, std::vector<float>> &SpeakerEmbeddings()
+      const {
+    return speaker_embeddings_;
+  }
+
+  // Check if speaker embeddings are available
+  bool HasSpeakerEmbeddings() const { return !speaker_embeddings_.empty(); }
+
+  // Get the embedding dimension (0 if no embeddings are stored)
+  int32_t EmbeddingDim() const;
+
  private:
   std::vector<OfflineSpeakerDiarizationSegment> segments_;
-  std::unordered_map<int32_t, std::vector<float>> speaker_embeddings_map_;
+  std::unordered_map<int32_t, std::vector<float>> speaker_embeddings_;
 };
 
 }  // namespace sherpa_onnx

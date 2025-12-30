@@ -69,16 +69,6 @@ void OfflineSpeakerDiarizationResult::Add(
   segments_.push_back(segment);
 }
 
-void OfflineSpeakerDiarizationResult::AddSpeakerEmbeddings(
-    const int32_t speaker_label, const std::vector<float> &embedding) {
-  speaker_embeddings_map_[speaker_label] = embedding;
-}
-
-std::vector<float> OfflineSpeakerDiarizationResult::GetSpeakerEmbeddings(
-    const int32_t speaker_label) const {
-  return speaker_embeddings_map_.at(speaker_label);
-}
-
 int32_t OfflineSpeakerDiarizationResult::NumSpeakers() const {
   std::unordered_set<int32_t> count;
   for (const auto &s : segments_) {
@@ -118,6 +108,27 @@ OfflineSpeakerDiarizationResult::SortBySpeaker() const {
   }
 
   return ans;
+}
+
+void OfflineSpeakerDiarizationResult::SetSpeakerEmbedding(
+    int32_t speaker_id, const std::vector<float> &embedding) {
+  speaker_embeddings_[speaker_id] = embedding;
+}
+
+std::vector<float> OfflineSpeakerDiarizationResult::GetSpeakerEmbedding(
+    int32_t speaker_id) const {
+  auto it = speaker_embeddings_.find(speaker_id);
+  if (it != speaker_embeddings_.end()) {
+    return it->second;
+  }
+  return {};
+}
+
+int32_t OfflineSpeakerDiarizationResult::EmbeddingDim() const {
+  if (speaker_embeddings_.empty()) {
+    return 0;
+  }
+  return speaker_embeddings_.begin()->second.size();
 }
 
 }  // namespace sherpa_onnx

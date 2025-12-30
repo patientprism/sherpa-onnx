@@ -1477,13 +1477,13 @@ SHERPA_ONNX_API int32_t SherpaOnnxOfflineSpeakerDiarizationResultGetNumSegments(
     const SherpaOnnxOfflineSpeakerDiarizationResult *r);
 
 SHERPA_ONNX_API void
-SherpaOnnxOfflineSpeakerDiarizationResultGetSpeakerEmbeddings(
+SherpaOnnxOfflineSpeakerDiarizationResultGetSpeakerEmbedding(
     const SherpaOnnxOfflineSpeakerDiarizationResult *r,
-    const int32_t speaker_label, float **embeddings, int32_t *num_embeddings);
+    int32_t speaker_label, float **embedding, int32_t *embedding_dim);
 
 SHERPA_ONNX_API void
-SherpaOnnxOfflineSpeakerDiarizationResultFreeSpeakerEmbeddings(
-    float *embeddings);
+SherpaOnnxOfflineSpeakerDiarizationResultFreeSpeakerEmbedding(
+    float *embedding);
 
 // The user has to invoke SherpaOnnxOfflineSpeakerDiarizationDestroySegment()
 // to free the returned pointer to avoid memory leak.
