@@ -147,6 +147,11 @@ class OfflineSpeakerDiarizationPyannoteImpl
         ComputeEmbeddings(audio, n, chunk_speaker_samples_list_pair.second,
                           &valid_indexes, std::move(callback), callback_arg);
 
+    if (embeddings.rows() == 0) {
+      SHERPA_ONNX_LOGE("No valid embeddings computed - all were NaN or filtered");
+      return {};
+    }
+
     if (valid_indexes.size() != chunk_speaker_samples_list_pair.second.size()) {
       std::vector<Int32Pair> chunk_speaker_pair;
       std::vector<std::vector<Int32Pair>> sample_indexes;
@@ -165,6 +170,11 @@ class OfflineSpeakerDiarizationPyannoteImpl
 
     std::vector<int32_t> cluster_labels = clustering_->Cluster(
         &embeddings(0, 0), embeddings.rows(), embeddings.cols());
+
+    if (cluster_labels.empty()) {
+      SHERPA_ONNX_LOGE("Clustering returned no labels");
+      return {};
+    }
 
     int32_t max_cluster_index =
         *std::max_element(cluster_labels.begin(), cluster_labels.end());
